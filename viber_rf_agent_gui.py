@@ -314,34 +314,22 @@ class ViberRFAgentApp:
         interval_min = int(self.spin_interval.get())
         prompt_template = self.txt_prompt.get("1.0", tk.END).strip()
 
-        temp_db = "viber_temp.db"
-        temp_wal = "viber_temp.db-wal"
-        temp_shm = "viber_temp.db-shm"
-
         try:
-            # 1. Kiểm tra & Copy file viber.db cùng các file bộ nhớ đệm WAL/SHM
             if not os.path.exists(db_path):
                 self.log(f"❌ LỖI: Không tìm thấy viber.db tại {db_path}")
                 return
 
-            shutil.copy2(db_path, temp_db)
+            # 1. Đọc trực tiếp qua SQLite URI Read-Only mode
+            # Bỏ qua thao tác copy file của Windows để tránh bị dính lock file .db-shm / .db-wal
+            abs_db_path = os.path.abspath(db_path).replace("\\", "/")
+            db_uri = f"file:{abs_db_path}?mode=ro"
 
-            # Copy thêm file WAL và SHM nếu Viber đang mở
-            wal_origin = db_path + "-wal"
-            shm_origin = db_path + "-shm"
-
-            if os.path.exists(wal_origin):
-                shutil.copy2(wal_origin, temp_wal)
-            if os.path.exists(shm_origin):
-                shutil.copy2(shm_origin, temp_shm)
-
-            # 2. Truy vấn tin nhắn trong N phút gần nhất
             keywords = [
                 k.strip().lower() for k in keywords_str.split(",") if k.strip()
             ]
             one_hour_ago_ms = int((time.time() - (interval_min * 60)) * 1000)
 
-            conn = sqlite3.connect(temp_db)
+            conn = sqlite3.connect(db_uri, uri=True)
             cursor = conn.cursor()
 
             query = """
@@ -390,7 +378,7 @@ class ViberRFAgentApp:
                 chat_logs += f"=== NHÓM: {g_name} ===\n"
                 chat_logs += "\n".join(msgs) + "\n\n"
 
-            # 3. Gọi Gemini API
+            # 2. Gọi Gemini API
             self.log("🤖 Đang gửi dữ liệu sang Gemini AI tóm tắt...")
             prompt = prompt_template.replace("{CHAT_LOGS}", chat_logs)
 
@@ -401,22 +389,13 @@ class ViberRFAgentApp:
 
             summary_text = f"📡 *BÁO CÁO RF ĐỒNG THÁP ({interval_min} PHÚT VỪA QUA)*\n\n{response.text}"
 
-            # 4. Gửi báo cáo về Telegram Bot
+            # 3. Gửi báo cáo về Telegram Bot
             self.log("📲 Đang gửi kết quả về Telegram...")
             self.send_telegram(tele_token, tele_chat_id, summary_text)
             self.log("✅ HOÀN THÀNH CHU KỲ TÓM TẮT VÀ GỬI THÀNH CÔNG!")
 
         except Exception as e:
             self.log(f"❌ LỖI TRONG QUÁ TRÌNH XỬ LÝ: {e}")
-
-        finally:
-            # Dọn dẹp tất cả các file tạm
-            for f in [temp_db, temp_wal, temp_shm]:
-                if os.path.exists(f):
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
 
     def send_telegram(self, token, chat_id, text):
         url = f"https://api.telegram.org/bot{token}/sendMessage"
