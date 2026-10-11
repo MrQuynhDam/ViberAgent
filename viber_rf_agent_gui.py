@@ -319,16 +319,20 @@ class ViberRFAgentApp:
                 self.log(f"❌ LỖI: Không tìm thấy viber.db tại {db_path}")
                 return
 
-            # 1. Đọc trực tiếp qua SQLite URI Read-Only mode
-            # Bỏ qua thao tác copy file của Windows để tránh bị dính lock file .db-shm / .db-wal
+            # Chuẩn hóa đường dẫn URI cho Windows (Bắt buộc phải có file:/// 3 dấu gạch)
             abs_db_path = os.path.abspath(db_path).replace("\\", "/")
-            db_uri = f"file:{abs_db_path}?mode=ro"
+            if not abs_db_path.startswith("/"):
+                abs_db_path = "/" + abs_db_path
+                
+            # Thêm immutable=1 để ép SQLite đọc dữ liệu tĩnh, không đụng vào lock của Viber
+            db_uri = f"file:{abs_db_path}?mode=ro&immutable=1"
 
             keywords = [
                 k.strip().lower() for k in keywords_str.split(",") if k.strip()
             ]
             one_hour_ago_ms = int((time.time() - (interval_min * 60)) * 1000)
 
+            # Kết nối trực tiếp URI
             conn = sqlite3.connect(db_uri, uri=True)
             cursor = conn.cursor()
 
@@ -378,7 +382,7 @@ class ViberRFAgentApp:
                 chat_logs += f"=== NHÓM: {g_name} ===\n"
                 chat_logs += "\n".join(msgs) + "\n\n"
 
-            # 2. Gọi Gemini API
+            # Gọi Gemini API
             self.log("🤖 Đang gửi dữ liệu sang Gemini AI tóm tắt...")
             prompt = prompt_template.replace("{CHAT_LOGS}", chat_logs)
 
@@ -389,7 +393,7 @@ class ViberRFAgentApp:
 
             summary_text = f"📡 *BÁO CÁO RF ĐỒNG THÁP ({interval_min} PHÚT VỪA QUA)*\n\n{response.text}"
 
-            # 3. Gửi báo cáo về Telegram Bot
+            # Gửi báo cáo về Telegram Bot
             self.log("📲 Đang gửi kết quả về Telegram...")
             self.send_telegram(tele_token, tele_chat_id, summary_text)
             self.log("✅ HOÀN THÀNH CHU KỲ TÓM TẮT VÀ GỬI THÀNH CÔNG!")
