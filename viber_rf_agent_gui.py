@@ -315,22 +315,31 @@ class ViberRFAgentApp:
         prompt_template = self.txt_prompt.get("1.0", tk.END).strip()
 
         temp_db = "viber_temp.db"
+        temp_wal = "viber_temp.db-wal"
+        temp_shm = "viber_temp.db-shm"
 
         try:
-            # 1. Copy DB sang file tạm
+            # 1. Kiểm tra & Copy file viber.db cùng các file bộ nhớ đệm WAL/SHM
             if not os.path.exists(db_path):
                 self.log(f"❌ LỖI: Không tìm thấy viber.db tại {db_path}")
                 return
 
             shutil.copy2(db_path, temp_db)
 
+            # Copy thêm file WAL và SHM nếu Viber đang mở
+            wal_origin = db_path + "-wal"
+            shm_origin = db_path + "-shm"
+
+            if os.path.exists(wal_origin):
+                shutil.copy2(wal_origin, temp_wal)
+            if os.path.exists(shm_origin):
+                shutil.copy2(shm_origin, temp_shm)
+
             # 2. Truy vấn tin nhắn trong N phút gần nhất
             keywords = [
                 k.strip().lower() for k in keywords_str.split(",") if k.strip()
             ]
-            one_hour_ago_ms = int(
-                (time.time() - (interval_min * 60)) * 1000
-            )
+            one_hour_ago_ms = int((time.time() - (interval_min * 60)) * 1000)
 
             conn = sqlite3.connect(temp_db)
             cursor = conn.cursor()
@@ -401,8 +410,13 @@ class ViberRFAgentApp:
             self.log(f"❌ LỖI TRONG QUÁ TRÌNH XỬ LÝ: {e}")
 
         finally:
-            if os.path.exists(temp_db):
-                os.remove(temp_db)
+            # Dọn dẹp tất cả các file tạm
+            for f in [temp_db, temp_wal, temp_shm]:
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
 
     def send_telegram(self, token, chat_id, text):
         url = f"https://api.telegram.org/bot{token}/sendMessage"
