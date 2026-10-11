@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -13,6 +14,22 @@ from google import genai
 import requests
 
 CONFIG_FILE = "viber_agent_config.json"
+SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+class ViberDBEncryptedError(Exception):
+    """viber.db không phải SQLite thuần (đã bị Viber mã hóa)."""
+
+
+def check_viber_db_readable(db_path):
+    """Đọc 16 byte đầu của file để biết có phải SQLite thuần hay không."""
+    with open(db_path, "rb") as f:
+        header = f.read(16)
+    if header != SQLITE_MAGIC:
+        raise ViberDBEncryptedError(
+            "viber.db đã bị Viber mã hóa (header không phải 'SQLite format 3'). "
+            "Viber PC từ bản 19.4 trở lên mã hóa DB nên không thể đọc trực tiếp bằng sqlite3."
+        )
 
 DEFAULT_PROMPT = """Bạn là một trợ lý AI chuyên về Tối ưu & Vận hành Mạng Vô tuyến (RF Engineer Assistant).
 Dưới đây là toàn bộ tin nhắn trong khoảng thời gian vừa qua từ các nhóm Viber công việc khu vực Đồng Tháp (mã trạm DTP, TGG):
@@ -319,13 +336,14 @@ class ViberRFAgentApp:
                 self.log(f"❌ LỖI: Không tìm thấy viber.db tại {db_path}")
                 return
 
-            # Chuẩn hóa đường dẫn URI cho Windows (Bắt buộc phải có file:/// 3 dấu gạch)
+            # Kiểm tra file có phải SQLite thuần không (tránh lỗi 'file is not a database')
+            check_viber_db_readable(db_path)
+
+            # Chuẩn hóa đường dẫn URI (mã hóa ký tự đặc biệt như dấu cách, tiếng Việt, #, ?)
             abs_db_path = os.path.abspath(db_path).replace("\\", "/")
             if not abs_db_path.startswith("/"):
                 abs_db_path = "/" + abs_db_path
-                
-            # Thêm immutable=1 để ép SQLite đọc dữ liệu tĩnh, không đụng vào lock của Viber
-            db_uri = f"file:{abs_db_path}?mode=ro&immutable=1"
+            db_uri = "file:" + urllib.parse.quote(abs_db_path, safe="/:") + "?mode=ro&immutable=1"
 
             keywords = [
                 k.strip().lower() for k in keywords_str.split(",") if k.strip()
@@ -398,6 +416,10 @@ class ViberRFAgentApp:
             self.send_telegram(tele_token, tele_chat_id, summary_text)
             self.log("✅ HOÀN THÀNH CHU KỲ TÓM TẮT VÀ GỬI THÀNH CÔNG!")
 
+        except ViberDBEncryptedError as e:
+            self.log(f"❌ {e}")
+            self.log("⛔ Dừng Agent vì không có nguồn dữ liệu đọc được.")
+            self.root.after(0, self.stop_agent)
         except Exception as e:
             self.log(f"❌ LỖI TRONG QUÁ TRÌNH XỬ LÝ: {e}")
 
